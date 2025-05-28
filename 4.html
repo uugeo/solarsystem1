@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>太陽系シミュレーション</title>
+    <style>
+        canvas {
+            display: block;
+            background-color: black;
+        }
+        .controls {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>太陽系シミュレーション</h1>
+    <canvas id="solarCanvas"></canvas>
+    <div class="controls">
+        <label for="speed">時間の進み方:</label>
+        <input type="range" id="speed" min="1" max="100" value="10">
+        <button onclick="resetSimulation()">元に戻す</button>
+        <label for="toggleSun">太陽を表示</label>
+        <input type="checkbox" id="toggleSun" checked>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('solarCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight * 0.8;
+
+        const G = 6.67430e-11;
+        const AU = 1.496e11;
+        const SUN_MASS = 1.989e30;
+        const C = 3e8; // 光速
+
+        let timeStep = 10;
+        let showSun = true;
+
+        const planets = [
+            { name: 'Mercury', x: 0.387 * AU, y: 0, vx: 0, vy: 47.87e3, mass: 3.301e23, color: 'gray', trail: [] },
+            { name: 'Venus', x: 0.723 * AU, y: 0, vx: 0, vy: 35.02e3, mass: 4.867e24, color: 'yellow', trail: [] },
+            { name: 'Earth', x: AU, y: 0, vx: 0, vy: 29.78e3, mass: 5.972e24, color: 'blue', trail: [] },
+            { name: 'Mars', x: 1.524 * AU, y: 0, vx: 0, vy: 24.07e3, mass: 6.39e23, color: 'red', trail: [] }
+        ];
+
+        function drawSun() {
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, canvas.height / 2, 10, 0, Math.PI * 2);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+        }
+
+        function drawPlanets() {
+            planets.forEach(planet => {
+                const x = canvas.width / 2 + planet.x / AU * 250;
+                const y = canvas.height / 2 + planet.y / AU * 250;
+                
+                planet.trail.push({ x, y });
+
+                ctx.beginPath();
+                ctx.arc(x, y, 5, 0, Math.PI * 2);
+                ctx.fillStyle = planet.color;
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.moveTo(planet.trail[0].x, planet.trail[0].y);
+                planet.trail.forEach(point => {
+                    ctx.lineTo(point.x, point.y);
+                });
+                ctx.strokeStyle = planet.color;
+                ctx.stroke();
+
+                ctx.fillStyle = 'white';
+                ctx.fillText(planet.name, x + 7, y - 7);
+            });
+        }
+
+        function updatePositions() {
+            planets.forEach(planet => {
+                const dx = -planet.x;
+                const dy = -planet.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (showSun) {
+                    const force = (G * SUN_MASS * planet.mass) / (dist * dist);
+                    const accel = force / planet.mass;
+
+                    const delay = dist / C; // 光速による遅延
+                    const delayedDist = dist - delay * planet.vx;
+
+                    planet.vx += (dx / delayedDist) * accel * (timeStep * 1000);
+                    planet.vy += (dy / delayedDist) * accel * (timeStep * 1000);
+                }
+                planet.x += planet.vx * (timeStep * 1000);
+                planet.y += planet.vy * (timeStep * 1000);
+            });
+        }
+
+        function resetSimulation() {
+            planets.forEach((planet, i) => {
+                planet.x = [0.387, 0.723, 1, 1.524][i] * AU;
+                planet.y = 0;
+                planet.vx = 0;
+                planet.vy = [47.87e3, 35.02e3, 29.78e3, 24.07e3][i];
+                planet.trail = [];
+            });
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (showSun) drawSun();
+            drawPlanets();
+            updatePositions();
+            requestAnimationFrame(animate);
+        }
+
+        document.getElementById('speed').addEventListener('input', (e) => {
+            timeStep = e.target.value;
+        });
+
+        document.getElementById('toggleSun').addEventListener('change', (e) => {
+            showSun = e.target.checked;
+        });
+
+        resetSimulation();
+        animate();
+    </script>
+</body>
+</html>
+
+
+]
