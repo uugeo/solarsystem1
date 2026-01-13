@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Geocentric Model (Pure Circular Orbits)</title>
+<style>
+body {
+  text-align: center;
+  font-family: Arial, sans-serif;
+}
+canvas {
+  border: 1px solid black;
+  margin-top: 20px;
+}
+.controls {
+  margin-top: 15px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>Geocentric Model (Pure Circular Orbits)</h1>
+
+<canvas id="canvas" width="800" height="800"></canvas>
+
+<div class="controls">
+  <button id="toggle">Start</button>
+  <button id="reset" style="margin-left:8px;">Reset Trails</button>
+  <label style="margin-left:15px;">
+    Speed:
+    <input type="range" id="speed" min="0.1" max="5" step="0.1" value="1">
+    <span id="speedValue">1.0</span>x
+  </label>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const cx = canvas.width / 2;
+const cy = canvas.height / 2;
+
+// ===== 時間制御 =====
+let t = 0;
+const dt = 0.01;
+let speedFactor = 1;
+let isRunning = false;
+
+// ===== 地球（中心・固定）=====
+const earth = {
+  x: cx,
+  y: cy,
+  r: 12,
+  name: "Earth"
+};
+
+// ===== 太陽（地球の周り）=====
+const sun = {
+  R: 200,
+  omega: 0.01,
+  r: 18,
+  name: "Sun"
+};
+
+// ===== 惑星（すべて地球中心円運動）=====
+const planets = [
+  { name:"Mercury", R:80,  omega:0.12, r:4,  color:"gray",   theta:0, trail:[] },
+  { name:"Venus",   R:120, omega:0.09, r:6,  color:"orange", theta:0, trail:[] },
+  { name:"Mars",    R:170, omega:0.06, r:5,  color:"red",    theta:0, trail:[] },
+  { name:"Jupiter", R:240, omega:0.03, r:9,  color:"brown",  theta:0, trail:[] }
+];
+
+// ===== UI =====
+const toggleBtn = document.getElementById("toggle");
+const resetBtn  = document.getElementById("reset");
+const speedSlider = document.getElementById("speed");
+const speedValue  = document.getElementById("speedValue");
+
+toggleBtn.onclick = () => {
+  isRunning = !isRunning;
+  toggleBtn.textContent = isRunning ? "Stop" : "Start";
+};
+
+resetBtn.onclick = () => {
+  planets.forEach(p => p.trail = []);
+};
+
+speedSlider.oninput = () => {
+  speedFactor = parseFloat(speedSlider.value);
+  speedValue.textContent = speedFactor.toFixed(1);
+};
+
+// ===== 描画 =====
+function drawBody(x, y, r, color, label) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  ctx.fillStyle = "black";
+  ctx.font = "12px Arial";
+  ctx.fillText(label, x + r + 4, y - r - 4);
+}
+
+function drawTrail(p) {
+  if (p.trail.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(p.trail[0].x, p.trail[0].y);
+  for (let i = 1; i < p.trail.length; i++) {
+    ctx.lineTo(p.trail[i].x, p.trail[i].y);
+  }
+  ctx.strokeStyle = p.color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+// ===== メインループ =====
+function animate() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // 地球
+  drawBody(earth.x, earth.y, earth.r, "blue", earth.name);
+
+  // 太陽
+  const sunX = earth.x + sun.R * Math.cos(sun.omega * t);
+  const sunY = earth.y + sun.R * Math.sin(sun.omega * t);
+  drawBody(sunX, sunY, sun.r, "yellow", sun.name);
+
+  // 惑星
+  planets.forEach(p => {
+    if (isRunning) {
+      p.theta += p.omega * dt * speedFactor;
+    }
+
+    const px = earth.x + p.R * Math.cos(p.theta);
+    const py = earth.y + p.R * Math.sin(p.theta);
+
+    if (isRunning) {
+      p.trail.push({ x: px, y: py });
+    }
+
+    drawTrail(p);
+    drawBody(px, py, p.r, p.color, p.name);
+  });
+
+  if (isRunning) {
+    t += dt * speedFactor;
+  }
+
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+
+</body>
+</html>
