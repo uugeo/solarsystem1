@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>太陽系N体（重力断が0.3cで伝搬）</title>
+  <style>
+    body { margin: 0; color: #fff; background: #000; font-family: sans-serif; }
+    canvas { display:block; background:#000; }
+    .controls{
+      padding:10px; background:#111; display:flex; flex-wrap:wrap;
+      gap:10px; align-items:center;
+    }
+    .group{ display:flex; align-items:center; gap:6px; }
+    .value{ min-width:90px; text-align:right; display:inline-block; }
+    button{ margin-right:6px; }
+  </style>
+</head>
+<body>
+  <h1 style="margin:10px;">太陽系シミュレーション</h1>
+  <canvas id="c"></canvas>
+
+  <div class="controls">
+    <div class="group">
+      <label for="speed">時間:</label>
+      <input type="range" id="speed" min="1" max="300" value="20">
+      <span class="value" id="speedVal"></span>
+    </div>
+
+    <div class="group">
+      <label for="scale">スケール:</label>
+      <input type="range" id="scale" min="10" max="220" value="70">
+      <span class="value" id="scaleVal"></span>
+    </div>
+
+    <button id="resetJ2000">初期化（J2000近似）</button>
+    <button id="resetLine">一直線配置</button>
+
+    <div class="group">
+      <label for="toggleSun">太陽</label>
+      <input type="checkbox" id="toggleSun" checked>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight - 150;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---- constants ---- */
+const AU = 149597870700; // m
+const DAY = 86400;       // s
+const C = 299792458;     // m/s
+const C_EFF = 0.00001 * C;   // ★ 伝搬速度：現実の10%
+
+const MU_SUN = 1.32712440041279419e20;
+const KM3_TO_M3 = 1e9;
+const MU = {
+  Sun: MU_SUN,
+  Mercury: 22031.868551 * KM3_TO_M3,
+  Venus:   324858.592000 * KM3_TO_M3,
+  Earth:   398600.435507 * KM3_TO_M3,
+  Mars:    42828.375816  * KM3_TO_M3,
+  Jupiter: 126712764.100000 * KM3_TO_M3,
+  Saturn:  37940584.841800  * KM3_TO_M3,
+  Uranus:  5794556.400000   * KM3_TO_M3,
+  Neptune: 6836527.100580   * KM3_TO_M3
+};
+
+const DEG = Math.PI/180;
+function wrapPi(x){
+  x = (x + Math.PI) % (2*Math.PI);
+  if (x < 0) x += 2*Math.PI;
+  return x - Math.PI;
+}
+function keplerE(M, e){
+  let E = M;
+  for (let k=0;k<30;k++){
+    const f = E - e*Math.sin(E) - M;
+    const fp = 1 - e*Math.cos(E);
+    const d = f/fp;
+    E -= d;
+    if (Math.abs(d) < 1e-13) break;
+  }
+  return E;
+}
+function rotZ(v, ang){
+  const c=Math.cos(ang), s=Math.sin(ang);
+  return {x:c*v.x - s*v.y, y:s*v.x + c*v.y, z:v.z};
+}
+function rotX(v, ang){
+  const c=Math.cos(ang), s=Math.sin(ang);
+  return {x:v.x, y:c*v.y - s*v.z, z:s*v.y + c*v.z};
+}
+
+/* J2000 approx elements (T=0) */
+const ELEM_J2000 = [
+  {name:'Mercury', a:0.38709927, e:0.20563593, I:7.00497902,  L:252.25032350, varpi:77.45779628,  Omega:48.33076593, color:'gray'},
+  {name:'Venus',   a:0.72333566, e:0.00677672, I:3.39467605,  L:181.97909950, varpi:131.60246718, Omega:76.67984255, color:'gold'},
+  {name:'Earth',   a:1.00000261, e:0.01671123, I:-0.00001531, L:100.46457166, varpi:102.93768193, Omega:0.0,         color:'dodgerblue'},
+  {name:'Mars',    a:1.52371034, e:0.09339410, I:1.84969142,  L:-4.55343205,  varpi:-23.94362959, Omega:49.55953891, color:'red'},
+  {name:'Jupiter', a:5.20288700, e:0.04838624, I:1.30439695,  L:34.39644051,  varpi:14.72847983,  Omega:100.47390909, color:'orange'},
+  {name:'Saturn',  a:9.53667594, e:0.05386179, I:2.48599187,  L:49.95424423,  varpi:92.59887831,  Omega:113.66242448, color:'khaki'},
+  {name:'Uranus',  a:19.18916464,e:0.04725744, I:0.77263783,  L:313.23810451, varpi:170.95427630, Omega:74.01692503, color:'lightcyan'},
+  {name:'Neptune', a:30.06992276,e:0.00859048, I:1.77004347,  L:-55.12002969, varpi:44.96476227,  Omega:131.78422574, color:'deepskyblue'}
+];
+
+function stateFromElements(el, meanAnomalyOverrideRad=null){
+  const I = el.I*DEG;
+  const Omega = el.Omega*DEG;
+  const varpi = el.varpi*DEG;
+  const omega = varpi - Omega;
+
+  let M = (el.L*DEG) - varpi;
+  M = wrapPi(M);
+  if (meanAnomalyOverrideRad !== null) M = meanAnomalyOverrideRad;
+
+  const a = el.a * AU;
+  const e = el.e;
+
+  // 2-body with Sun (plus tiny correction)
+  const mu = MU_SUN + (MU[el.name] ?? 0);
+  const n = Math.sqrt(mu / (a*a*a));
+
+  const E = keplerE(M, e);
+  const cosE = Math.cos(E), sinE = Math.sin(E);
+
+  const xP = a*(cosE - e);
+  const yP = a*Math.sqrt(1 - e*e)*sinE;
+
+  const fac = (n*a) / (1 - e*cosE);
+  const vxP = -fac*sinE;
+  const vyP =  fac*Math.sqrt(1 - e*e)*cosE;
+
+  let rVec = {x:xP, y:yP, z:0};
+  let vVec = {x:vxP, y:vyP, z:0};
+
+  rVec = rotZ(rVec, omega);
+  rVec = rotX(rVec, I);
+  rVec = rotZ(rVec, Omega);
+
+  vVec = rotZ(vVec, omega);
+  vVec = rotX(vVec, I);
+  vVec = rotZ(vVec, Omega);
+
+  return { r:rVec, v:vVec };
+}
+
+/* ---- bodies ---- */
+let bodies = [];
+let SCALE = 70; // px/AU
+let showSun = true;
+
+// ★ 太陽OFFイベント（重力断が伝搬中）
+let sunOffActive = false;
+let simTime = 0; // s
+let tOff = 0;
+
+function toScreen(x, y){
+  return { x: canvas.width/2 + (x/AU)*SCALE, y: canvas.height/2 + (y/AU)*SCALE };
+}
+
+function makeBody(name, mu, color){
+  return {
+    name, mu, color,
+    x:0, y:0, z:0,
+    vx:0, vy:0, vz:0,
+    ax:0, ay:0, az:0,
+    trail: [],
+    // ★ 伝搬：この時刻を過ぎたら「等速直線」に切替
+    cutoffTime: Infinity,
+    inertial: false
+  };
+}
+
+function zeroMomentaToBarycenter(){
+  let px=0, py=0, pz=0;
+  for (const b of bodies){
+    if (b.name === 'Sun') continue;
+    px += b.mu * b.vx;
+    py += b.mu * b.vy;
+    pz += b.mu * b.vz;
+  }
+  const sun = bodies.find(b=>b.name==='Sun');
+  sun.vx = -px / sun.mu;
+  sun.vy = -py / sun.mu;
+  sun.vz = -pz / sun.mu;
+}
+
+function resetPropagationFlags(){
+  sunOffActive = false;
+  for (const b of bodies){
+    b.cutoffTime = Infinity;
+    b.inertial = false;
+  }
+}
+
+function initJ2000(meanAnomalyOverrideRad=null){
+  bodies = [];
+  bodies.push(makeBody('Sun', MU_SUN, 'red'));
+  for (const el of ELEM_J2000){
+    const b = makeBody(el.name, MU[el.name], el.color);
+    const st = stateFromElements(el, meanAnomalyOverrideRad);
+    b.x = st.r.x; b.y = st.r.y; b.z = st.r.z;
+    b.vx = st.v.x; b.vy = st.v.y; b.vz = st.v.z;
+    bodies.push(b);
+  }
+  zeroMomentaToBarycenter();
+  for (const b of bodies) b.trail = [];
+  simTime = 0;
+  resetPropagationFlags();
+}
+
+function initLine(){
+  initJ2000(0);
+}
+
+/* ---- physics ---- */
+const SOFT2 = (1e7)*(1e7); // (10,000 km)^2
+
+function startSunOff(){
+  // 太陽は表示OFFだが、各惑星への「重力断」到達までは重力が残る、という教材モデル
+  sunOffActive = true;
+  tOff = simTime;
+
+  const sun = bodies.find(b=>b.name==='Sun');
+  for (const b of bodies){
+    if (b.name === 'Sun') continue;
+    const dx = b.x - sun.x;
+    const dy = b.y - sun.y;
+    const dz = b.z - sun.z;
+    const r = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    const delay = r / C_EFF;             // ★ 0.3c
+    b.cutoffTime = tOff + delay;
+    b.inertial = false;
+  }
+}
+
+function restoreSunOn(){
+  // 太陽を戻したら全員ふつうに重力計算へ戻す（伝搬は入れない）
+  resetPropagationFlags();
+}
+
+function updateInertialFlags(){
+  if (!sunOffActive) return;
+  for (const b of bodies){
+    if (b.name === 'Sun') continue;
+    if (!b.inertial && simTime >= b.cutoffTime){
+      // 到達：以後は等速直線（加速度ゼロ、相互作用もしない教材モデル）
+      b.inertial = true;
+      b.ax = b.ay = b.az = 0;
+    }
+  }
+}
+
+function computeAccel(){
+  for (const bi of bodies){ bi.ax=bi.ay=bi.az=0; }
+
+  const sun = bodies[0]; // Sun is first
+
+  for (let i=0;i<bodies.length;i++){
+    const bi = bodies[i];
+
+    // ★ inertialに入った天体は加速度ゼロ（等速直線）
+    if (bi.inertial) continue;
+
+    for (let j=0;j<bodies.length;j++){
+      if (i===j) continue;
+      const bj = bodies[j];
+
+      // ★ inertialに入った天体は「他を引かない」教材モデル
+      if (bj.inertial) continue;
+
+      // ★ 太陽OFF中：太陽の重力は「各惑星のcutoffTime」までだけ有効
+      if (sunOffActive && bj === sun && simTime >= bi.cutoffTime){
+        continue;
+      }
+
+      const dx = bj.x - bi.x;
+      const dy = bj.y - bi.y;
+      const dz = bj.z - bi.z;
+      const r2 = dx*dx + dy*dy + dz*dz + SOFT2;
+      const invR = 1/Math.sqrt(r2);
+      const invR3 = invR*invR*invR;
+      const a = bj.mu * invR3;
+      bi.ax += dx * a;
+      bi.ay += dy * a;
+      bi.az += dz * a;
+    }
+  }
+}
+
+// 速度ベルレ（inertialは直進に分岐）
+function step(dt){
+  // 先に「到達判定」
+  updateInertialFlags();
+
+  // a(t)
+  computeAccel();
+
+  // v(t+dt/2), x(t+dt)
+  for (const b of bodies){
+    if (b.inertial){
+      b.x += b.vx*dt;
+      b.y += b.vy*dt;
+      b.z += b.vz*dt;
+      continue;
+    }
+    b.vx += 0.5*b.ax*dt;
+    b.vy += 0.5*b.ay*dt;
+    b.vz += 0.5*b.az*dt;
+    b.x  += b.vx*dt;
+    b.y  += b.vy*dt;
+    b.z  += b.vz*dt;
+  }
+
+  // simTime進める（この後のa(t+dt)用）
+  simTime += dt;
+
+  // 到達判定（dt内で到達した分を反映）
+  updateInertialFlags();
+
+  // a(t+dt)
+  computeAccel();
+
+  // v(t+dt)
+  for (const b of bodies){
+    if (b.inertial) continue;
+    b.vx += 0.5*b.ax*dt;
+    b.vy += 0.5*b.ay*dt;
+    b.vz += 0.5*b.az*dt;
+  }
+}
+
+/* ---- draw ---- */
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.font = '13px sans-serif';
+
+  for (const b of bodies){
+    if (!showSun && b.name==='Sun') continue;
+
+    const s = toScreen(b.x, b.y);
+
+    b.trail.push({x:s.x, y:s.y});
+    if (b.trail.length > 2500) b.trail.shift();
+
+    if (b.trail.length >= 2){
+      ctx.beginPath();
+      ctx.moveTo(b.trail[0].x, b.trail[0].y);
+      for (const p of b.trail) ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, (b.name==='Sun') ? 10 : 4, 0, Math.PI*2);
+    ctx.fillStyle = b.color;
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    // inertialに入った惑星が見分けられるよう、名前の後ろに"→"を付ける（不要なら削除）
+    const mark = (b.inertial && b.name!=='Sun') ? ' →' : '';
+    ctx.fillText(b.name + mark, s.x + 6, s.y - 6);
+  }
+}
+
+/* ---- animation ---- */
+let lastTs = null;
+let daysPerSec = 20;
+
+function dtFromFrame(dtReal){
+  const dtSim = dtReal * daysPerSec * DAY;
+  return Math.min(dtSim, 2*DAY);
+}
+
+function animate(ts){
+  if (!lastTs) lastTs = ts;
+  const dtReal = (ts - lastTs)/1000;
+  lastTs = ts;
+
+  const dt = dtFromFrame(dtReal);
+  const sub = 4;
+  for (let k=0;k<sub;k++) step(dt/sub);
+
+  draw();
+  requestAnimationFrame(animate);
+}
+
+/* ---- UI ---- */
+const speedEl = document.getElementById('speed');
+const speedValEl = document.getElementById('speedVal');
+const scaleEl = document.getElementById('scale');
+const scaleValEl = document.getElementById('scaleVal');
+const toggleSunEl = document.getElementById('toggleSun');
+
+function sync(){
+  speedValEl.textContent = `${daysPerSec} 日/秒`;
+  scaleValEl.textContent = `${SCALE} px/AU`;
+}
+
+speedEl.addEventListener('input', e=>{
+  daysPerSec = Number(e.target.value);
+  sync();
+});
+scaleEl.addEventListener('input', e=>{
+  SCALE = Number(e.target.value);
+  for (const b of bodies) b.trail = [];
+  sync();
+});
+
+toggleSunEl.addEventListener('change', e=>{
+  const next = e.target.checked;
+
+  if (showSun && !next){
+    // ON→OFF：太陽非表示 + 重力断の伝搬開始
+    showSun = false;
+    startSunOff();
+  } else if (!showSun && next){
+    // OFF→ON：太陽表示 + 重力を即時復帰
+    showSun = true;
+    restoreSunOn();
+  }
+});
+
+document.getElementById('resetJ2000').addEventListener('click', ()=>{
+  initJ2000();
+  lastTs = null;
+});
+document.getElementById('resetLine').addEventListener('click', ()=>{
+  initLine();
+  lastTs = null;
+});
+
+// start
+daysPerSec = Number(speedEl.value);
+SCALE = Number(scaleEl.value);
+sync();
+initJ2000();
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
